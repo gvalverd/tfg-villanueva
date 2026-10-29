@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Panel del tutor · TFG Villanueva</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>body { margin: 0; }</style>
+</head>
+<body>
+<header class="band">
+  <div class="wrap">
+    <div>
+      <div class="eyebrow">Universidad Villanueva · Área de Análisis de Negocios · TFG <span id="curso"></span></div>
+      <h1>Diagnóstico y elección de línea de TFG</h1>
+      <p>Respuestas de tus alumnos, línea recomendada para cada uno y hoja de aceptación de tutela lista para descargar.</p>
+    </div>
+    <div class="band-actions" id="band-actions" hidden>
+      <button class="btn" id="btn-new" type="button">Nuevo alumno <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4"/></svg></button>
+      <button class="btn ghost" id="btn-import" type="button">Importar Excel de Forms</button>
+      <button class="btn ghost" id="btn-pwd" type="button">Cambiar contraseña</button>
+      <button class="btn ghost" id="btn-logout" type="button">Salir</button>
+      <input type="file" id="file-import" class="hidden-file" accept=".xlsx,.xls,.csv" tabindex="-1" aria-hidden="true">
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <section class="login" id="login" hidden>
+    <h2 style="font-size:24px">Acceso del tutor</h2>
+    <p style="margin:0;color:var(--muted)">Entra con el usuario que creaste en Supabase. Los alumnos no tienen acceso a esta página.</p>
+    <form id="login-form" style="display:flex;flex-direction:column;gap:12px">
+      <div class="q"><label for="l-email">Correo</label><input id="l-email" type="email" autocomplete="username" required></div>
+      <div class="q"><label for="l-pass">Contraseña</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
+      <button class="btn" type="submit" id="l-btn">Entrar <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4"/></svg></button>
+      <div class="msg" id="l-msg" aria-live="polite"></div>
+      <button class="linkbtn" type="button" id="btn-forgot">¿Has olvidado la contraseña?</button>
+    </form>
+  </section>
+
+  <section class="login" id="pwd" hidden>
+    <h2 style="font-size:24px" id="pwd-title">Nueva contraseña</h2>
+    <p style="margin:0;color:var(--muted)" id="pwd-help">Usa al menos 10 caracteres.</p>
+    <form id="pwd-form" style="display:flex;flex-direction:column;gap:12px">
+      <div class="q"><label for="p-1">Nueva contraseña</label><input id="p-1" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div class="q"><label for="p-2">Repite la contraseña</label><input id="p-2" type="password" autocomplete="new-password" minlength="10" required></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit" id="p-btn">Guardar contraseña</button><button class="btn ghost" type="button" id="p-cancel">Cancelar</button></div>
+      <div class="msg" id="p-msg" aria-live="polite"></div>
+    </form>
+  </section>
+
+  <div class="main" id="panel" hidden>
+    <aside class="side" aria-label="Alumnos">
+      <h2>Alumnos <span id="n-alumnos" style="font-variant-numeric:tabular-nums"></span></h2>
+      <input class="search" id="search" type="search" placeholder="Buscar por nombre" aria-label="Buscar alumno por nombre">
+      <div class="list" id="list"></div>
+      <div class="toolbar">
+        <button class="btn ghost small" id="btn-refresh" type="button">Actualizar</button>
+        <button class="btn ghost small" id="btn-csv" type="button">Exportar todos (.csv)</button>
+      </div>
+      <label class="switch"><input type="checkbox" id="sw-open"> Cuestionario abierto</label>
+      <div class="q"><label for="student-url" style="font-size:13px;color:var(--muted)">Enlace para los alumnos</label>
+        <div class="linkrow"><input id="student-url" type="text" readonly style="background:var(--surface);color:var(--fg)"><button class="btn small" type="button" id="btn-copy-url">Copiar</button></div></div>
+      <div class="store-state" id="store-state"></div>
+    </aside>
+    <section class="form-col" id="form-col" aria-label="Cuestionario"></section>
+    <aside class="reco" id="reco" aria-label="Recomendación"></aside>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="shared.js"></script>
+<script src="tutela.js"></script>
+<script>
+"use strict";
+const client = makeClient();
+let students = {};       // id de fila -> { id, token, answers, tutor, origen, updatedAt }
+let currentId = null;
+let saveTimer = null, pendingId = null;
+let openSecs = new Set(["A", "C", "E"]);
+$("#curso").textContent = CURSO;
+const studentUrl = new URL("./", location.href).toString();
+$("#student-url").value = studentUrl;
+
+function fromRow(r) { return { id: r.id, token: r.token, answers: normalizeAnswers(r.answers), tutor: Object.assign({ line: "", title: "", phone: "", notes: "" }, r.tutor || {}), origen: r.origen, updatedAt: r.updated_at }; }
+function setState(t) { $("#store-state").textContent = t; }
+function setSaved(t) { const el = $("#saved"); if (el) el.textContent = t; }
+
+/* ============ Datos ============ */
+async function loadAll(keepCurrent) {
+  const { data, error } = await client.from("tfg_respuestas").select("*").order("nombre");
+  if (error) { setState("No se pudieron cargar las respuestas: " + error.message); return; }
+  const next = {};
+  for (const r of data) next[r.id] = (pendingId === r.id && students[r.id]) ? students[r.id] : fromRow(r);
+  students = next;
+  if (!students[currentId]) currentId = Object.keys(students)[0] || null;
+  $("#n-alumnos").textContent = `(${data.length})`;
+  setState(`Actualizado a las ${new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}.`);
+  if (keepCurrent) { renderList(); if (!pendingId) renderRecoKeepFocus(); } else select(currentId);
+}
+async function persist(id) {
+  const rec = students[id]; if (!rec) return;
+  const { data, error } = await client.from("tfg_respuestas").update({ nombre: (rec.answers.q1 || "").trim() || "Sin nombre", email: (rec.answers.q2 || "").trim() || null, answers: rec.answers, tutor: rec.tutor, updated_at: new Date().toISOString() }).eq("id", id).select("updated_at").single();
+  if (pendingId === id) pendingId = null;
+  if (error) { setSaved("No se pudo guardar: " + error.message); return; }
+  rec.updatedAt = data.updated_at; setSaved("Guardado");
+}
+function scheduleSave() { setSaved("Guardando…"); pendingId = currentId; clearTimeout(saveTimer); const id = currentId; saveTimer = setTimeout(() => persist(id), 700); }
+
+/* ============ Lista ============ */
+function renderList() {
+  const q = ($("#search").value || "").toLowerCase();
+  const ids = Object.keys(students).sort((x, y) => (students[x].answers.q1 || "").localeCompare(students[y].answers.q1 || "", "es"));
+  const rows = ids.filter(id => (students[id].answers.q1 || "").toLowerCase().includes(q)).map(id => {
+    const s = students[id]; const r = recommend(s.answers);
+    const chosen = s.tutor.line ? LINES.find(l => l.id === s.tutor.line)?.short : null;
+    const when = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString("es-ES", { day: "numeric", month: "short" }) : "";
+    return `<button class="item" type="button" data-id="${esc(id)}" aria-current="${id === currentId}">
+      <span class="n">${esc(s.answers.q1 || "Sin nombre")}</span>
+      <span class="l">${chosen ? "Acordada: " + esc(chosen) : "Sugerida: " + esc(r.top.short) + " · " + r.top.score} · ${answeredCount(s.answers)}/${QUESTIONS.length} · ${esc(when)}</span>
+    </button>`;
+  });
+  $("#list").innerHTML = rows.length ? rows.join("") : `<div style="padding:12px 0;color:var(--muted);font-size:14px">${ids.length ? "Ningún alumno coincide con la búsqueda." : "Aún no hay respuestas. Comparte el enlace para los alumnos."}</div>`;
+}
+
+/* ============ Ficha ============ */
+function renderForm() {
+  const col = $("#form-col"); const rec = students[currentId];
+  if (!rec) {
+    col.innerHTML = `<div class="empty"><h2 style="font-size:24px">Todavía no hay respuestas</h2>
+      <p style="margin:0;color:var(--muted);max-width:60ch">Envía a tus alumnos el enlace del cuestionario. Cada uno solo ve y edita lo suyo; aquí aparecerán todas las respuestas en cuanto las envíen. También puedes importar el Excel de Microsoft Forms o crear una ficha a mano.</p>
+      <div class="linkrow" style="width:100%;max-width:560px"><input type="text" readonly value="${esc(studentUrl)}" style="background:var(--bg);color:var(--fg);border:1.5px solid var(--line)" aria-label="Enlace para los alumnos"><button class="btn small" type="button" data-act="copy-url">Copiar enlace</button></div></div>`;
+    return;
+  }
+  const a = rec.answers;
+  const origin = { web: "Enviado por el alumno", forms: "Importado de Forms", tutor: "Creado por el tutor" }[rec.origen] || "";
+  col.innerHTML = `
+    <div class="student-head">
+      <div><div class="eyebrow" style="color:var(--muted)">${esc(origin)}${rec.updatedAt ? " · " + esc(new Date(rec.updatedAt).toLocaleString("es-ES", { dateStyle: "medium", timeStyle: "short" })) : ""}</div><h2 id="student-name">${esc(a.q1 || "Sin nombre")}</h2></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="saved" id="saved" aria-live="polite"></span>
+        <button class="btn ghost small" type="button" id="btn-plink">Copiar enlace personal del alumno</button>
+        <button class="btn danger small" type="button" id="btn-del">Eliminar ficha</button></div>
+    </div>
+    <form id="qform" autocomplete="off" novalidate>
+      ${SECTIONS.map(s => `<details class="sec" data-sec="${s.k}" ${openSecs.has(s.k) ? "open" : ""}>
+        <summary><span class="letter">${s.k}</span>${esc(s.t)}<span class="count" id="cnt-${s.k}">${secCount(s, a)}/${s.q.length}</span><svg class="tw" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4"/></svg></summary>
+        <div class="sec-body"><fieldset>${s.q.map(q => qInput(q, a[q.id])).join("")}</fieldset></div>
+      </details>`).join("")}
+    </form>`;
+}
+
+/* ============ Recomendación ============ */
+function chevW(color) { return `<svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="${color || "#ffbc00"}" stroke-width="2.6"/></svg>`; }
+function titleFor(rec, r) { const lid = rec.tutor.line || r.top.id; return (rec.tutor.title || r.titleFor(lid)).replace(/^./, c => c.toUpperCase()); }
+function renderReco() {
+  const box = $("#reco"); const rec = students[currentId];
+  if (!rec) { box.innerHTML = `<div class="panel-dark"><div class="eyebrow">Recomendación</div><h3>Aparecerá aquí</h3><p style="margin:0;color:var(--band-muted);font-size:14px">Con las respuestas de cada alumno verás la línea que mejor encaja, por qué y el resto de opciones ordenadas.</p></div>`; return; }
+  const r = recommend(rec.answers); const t = rec.tutor; const chosenId = t.line || r.top.id;
+  const low = r.answered < 12;
+  box.innerHTML = `
+    <div class="panel-dark">
+      <div class="eyebrow">Línea recomendada · ${r.top.score}/100</div>
+      <h3>${esc(r.top.name)}</h3>
+      <ul class="why">${r.why.map(w => `<li>${chevW()}<span>${esc(w)}</span></li>`).join("")}${r.gaps.map(g => `<li class="gap">${chevW("#ffd57a")}<span>${esc(g)}</span></li>`).join("")}</ul>
+      <div class="conf">${r.answered} de ${r.total} preguntas respondidas${low ? " · recomendación provisional, faltan datos" : ""}</div>
+    </div>
+    <div class="box"><h4>Encaje con las seis líneas</h4>
+      <div class="ranking">${r.ranking.map((l, i) => `<div class="meter-row ${i === 0 ? "top" : ""}"><span class="name">${esc(l.short)}</span><span class="v">${l.score}</span><span class="bar" aria-hidden="true"><i style="width:${l.score}%"></i></span></div>`).join("")}</div></div>
+    <div class="box"><h4>Propuesta de trabajo</h4>
+      <dl class="kv"><dt>Alcance</dt><dd>${esc(r.scope)}</dd><dt>Entregable</dt><dd>${esc(DELIVERABLE[chosenId])}</dd></dl>
+      <div class="flags">${r.flags.map(f => `<div class="flag ${f.c}">${esc(f.t)}</div>`).join("")}</div></div>
+    <div class="box"><h4>Decisión del tutor y hoja de tutela</h4>
+      <div class="q"><label for="t-line">Línea acordada</label>
+        <select id="t-line" data-t="line"><option value="">Usar la recomendada (${esc(r.top.short)})</option>${LINES.map(l => `<option value="${l.id}" ${t.line === l.id ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select></div>
+      <div class="q"><label for="t-title">Título provisional</label><textarea id="t-title" data-t="title" rows="3">${esc(titleFor(rec, r))}</textarea></div>
+      <div class="q"><label for="t-phone">Teléfono del alumno</label><input id="t-phone" type="text" data-t="phone" value="${esc(t.phone)}" placeholder="(+34) …"></div>
+      <div class="q"><label for="t-notes">Notas de la entrevista (el alumno no las ve)</label><textarea id="t-notes" data-t="notes" rows="3">${esc(t.notes)}</textarea></div>
+      <div class="downloads">
+        <button class="btn" type="button" id="dl-tutela">Hoja de tutela (.docx) ${chevSvg}</button>
+        <button class="btn ghost" type="button" id="dl-ficha">Ficha completa (.md) ${chevSvg}</button>
+      </div>
+      <div class="msg" id="dl-msg" aria-live="polite"></div></div>`;
+}
+function renderRecoKeepFocus() { const act = document.activeElement; if (act && $("#reco").contains(act)) return; renderReco(); }
+function refreshCounts() { const a = students[currentId]?.answers; if (!a) return; for (const s of SECTIONS) { const el = $("#cnt-" + s.k); if (el) el.textContent = `${secCount(s, a)}/${s.q.length}`; } }
+function select(id) { currentId = id; renderList(); renderForm(); renderReco(); }
+
+/* ============ Eventos ============ */
+document.addEventListener("input", e => {
+  const el = e.target; const rec = students[currentId]; if (!rec) return;
+  if (el.closest("#qform") && el.dataset.q) {
+    const id = applyInput(rec.answers, el);
+    if (id === "q1") $("#student-name").textContent = el.value || "Sin nombre";
+    refreshCounts(); renderList(); renderRecoKeepFocus(); scheduleSave();
+  } else if (el.dataset.t) {
+    rec.tutor[el.dataset.t] = el.value;
+    if (el.dataset.t === "line") { rec.tutor.title = ""; renderReco(); renderList(); $("#t-line")?.focus(); }
+    scheduleSave();
+  }
+});
+document.addEventListener("toggle", e => { if (e.target.matches && e.target.matches("details.sec")) { const k = e.target.dataset.sec; e.target.open ? openSecs.add(k) : openSecs.delete(k); } }, true);
+$("#search").addEventListener("input", renderList);
+document.addEventListener("click", async e => {
+  const item = e.target.closest(".item"); if (item) { select(item.dataset.id); return; }
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.id === "btn-new") return createStudent();
+  if (b.id === "btn-import") return $("#file-import").click();
+  if (b.id === "btn-csv") return exportCsv();
+  if (b.id === "btn-refresh") return loadAll(true);
+  if (b.id === "btn-pwd") return showPwd(false);
+  if (b.id === "p-cancel") { $("#pwd").hidden = true; $("#panel").hidden = false; $("#band-actions").hidden = false; return; }
+  if (b.id === "btn-forgot") return forgot();
+  if (b.id === "btn-logout") { await client.auth.signOut(); location.reload(); return; }
+  if (b.id === "btn-copy-url" || b.dataset.act === "copy-url") return copyText(studentUrl, b);
+  if (b.id === "btn-plink") { const u = new URL("./", location.href); u.searchParams.set("t", students[currentId].token); return copyText(u.toString(), b); }
+  if (b.id === "btn-del") {
+    if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Pulsa otra vez para eliminar"; setTimeout(() => { if (b.isConnected) { b.dataset.confirm = ""; b.textContent = "Eliminar ficha"; } }, 4000); return; }
+    const id = currentId; const { error } = await client.from("tfg_respuestas").delete().eq("id", id);
+    if (error) { setSaved("No se pudo eliminar: " + error.message); return; }
+    delete students[id]; currentId = Object.keys(students)[0] || null; select(currentId); $("#n-alumnos").textContent = `(${Object.keys(students).length})`; return;
+  }
+  if (b.id === "dl-tutela") return dlTutela();
+  if (b.id === "dl-ficha") { downloadBlob(`Ficha_TFG_${fileName()}.md`, fichaMd(), "text/markdown;charset=utf-8"); $("#dl-msg").textContent = "Ficha descargada."; }
+});
+$("#sw-open").addEventListener("change", async e => {
+  const v = e.target.checked;
+  const { error } = await client.from("tfg_config").update({ abierto: v }).eq("id", 1);
+  if (error) { e.target.checked = !v; setState("No se pudo cambiar: " + error.message); } else setState(v ? "Cuestionario abierto: los alumnos pueden enviar y editar." : "Cuestionario cerrado: los alumnos ya no pueden enviar cambios.");
+});
+window.addEventListener("focus", () => { if (client && !$("#panel").hidden && !pendingId) loadAll(true); });
+
+async function createStudent(name, answers, origen) {
+  const a = answers || blankAnswers(); if (name) a.q1 = name;
+  const { data, error } = await client.from("tfg_respuestas").insert({ token: crypto.randomUUID(), nombre: (a.q1 || "").trim() || "Sin nombre", email: (a.q2 || "").trim() || null, answers: a, origen: origen || "tutor" }).select().single();
+  if (error) { setState("No se pudo crear la ficha: " + error.message); return null; }
+  students[data.id] = fromRow(data);
+  if (!answers) { openSecs.add("A"); select(data.id); setTimeout(() => $("#q1")?.focus(), 0); }
+  return data.id;
+}
+function fileName() { return slug(students[currentId]?.answers.q1 || "alumno").replace(/-/g, "_"); }
+
+/* ============ Descargas ============ */
+function xmlEsc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+async function dlTutela() {
+  const rec = students[currentId]; const msg = $("#dl-msg");
+  if (typeof JSZip === "undefined") { msg.textContent = "No se pudo cargar el generador de Word. Recarga la página."; return; }
+  if (!(rec.answers.q1 || "").trim()) { msg.textContent = "Falta el nombre del alumno."; return; }
+  const r = recommend(rec.answers);
+  const bin = atob(TUTELA_B64); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const zip = await JSZip.loadAsync(bytes);
+  let xml = await zip.file("word/document.xml").async("string");
+  const map = { NOMBRE: rec.answers.q1, EMAIL: rec.answers.q2, TELEFONO: rec.tutor.phone, AREA, TITULO: titleFor(rec, r).trim(), TUTOR };
+  for (const [k, v] of Object.entries(map)) xml = xml.split("{{" + k + "}}").join(xmlEsc(v || ""));
+  zip.file("word/document.xml", xml);
+  const blob = await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+  downloadBlob(`Hoja_tutela_TFG_${fileName()}.docx`, blob);
+  msg.textContent = "Hoja de tutela descargada.";
+}
+function fichaMd() {
+  const rec = students[currentId], a = rec.answers, r = recommend(a);
+  const lineId = rec.tutor.line || r.top.id; const L = LINES.find(l => l.id === lineId);
+  const out = [`# Ficha TFG · ${a.q1 || "Sin nombre"}`, "", `Tutor: ${TUTOR} · Área: ${AREA} · Curso ${CURSO}`, rec.updatedAt ? `Actualizado: ${new Date(rec.updatedAt).toLocaleString("es-ES")}` : "", "",
+    "## Recomendación", "", `- Línea recomendada: **${r.top.name}** (${r.top.score}/100)`, `- Línea acordada: **${L.name}**`, `- Título provisional: ${titleFor(rec, r)}`,
+    `- Alcance: ${r.scope}`, `- Entregable: ${DELIVERABLE[lineId]}`, "", "Por qué:", ...r.why.map(w => `- ${w}`), ...r.gaps.map(g => `- A vigilar: ${g}`), "", "Señales:", ...r.flags.map(f => `- ${f.t}`), "",
+    "Encaje con las líneas:", ...r.ranking.map(l => `- ${l.name}: ${l.score}`), ""];
+  if (rec.tutor.notes) out.push("## Notas de la entrevista", "", rec.tutor.notes, "");
+  for (const s of SECTIONS) { out.push(`## ${s.k}. ${s.t}`, ""); for (const q of s.q) out.push(`**${QNUM[q.id]}. ${q.t}**`, "", answerText(q, a[q.id]) || "_Sin respuesta_", ""); }
+  return out.join("\n");
+}
+function exportCsv() {
+  const ids = Object.keys(students);
+  if (!ids.length) { setState("No hay alumnos que exportar."); return; }
+  const head = ["Nombre", "Correo", "Origen", "Actualizado", "Línea recomendada", "Encaje", "Segunda línea", "Línea acordada", "Título provisional", "Alcance", "Teléfono", "Notas del tutor", ...QUESTIONS.map(q => `${QNUM[q.id]}. ${q.t}`)];
+  const rows = ids.map(id => {
+    const s = students[id], a = s.answers, r = recommend(a); const lid = s.tutor.line || r.top.id;
+    return [a.q1, a.q2, s.origen, s.updatedAt, r.top.name, r.top.score, r.ranking[1].name, LINES.find(l => l.id === lid).name, titleFor(s, r), r.scope, s.tutor.phone, s.tutor.notes, ...QUESTIONS.map(q => answerText(q, a[q.id]))];
+  });
+  const csv = "﻿" + [head, ...rows].map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(";")).join("\r\n");
+  downloadBlob("TFG_Villanueva_alumnos.csv", csv, "text/csv;charset=utf-8");
+}
+
+/* ============ Importar Excel de Microsoft Forms ============ */
+const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/^\s*\d+[\.\)]\s*/, "").replace(/[^a-z0-9]+/g, " ").trim();
+function matchColumn(headers, q) {
+  const target = norm(q.t), pref = target.slice(0, 38); let best = -1, bestScore = 0;
+  headers.forEach((h, i) => {
+    const n = norm(h); if (!n) return; let sc = 0;
+    if (n === target) sc = 3; else if (n.startsWith(pref) || target.startsWith(n.slice(0, 38))) sc = 2;
+    else { const tw = new Set(target.split(" ").filter(w => w.length > 3)); const hw = n.split(" ").filter(w => w.length > 3); const inter = hw.filter(w => tw.has(w)).length; sc = tw.size ? inter / tw.size : 0; if (sc < .6) sc = 0; }
+    if (sc > bestScore) { bestScore = sc; best = i; }
+  });
+  return best;
+}
+function pickOption(q, raw) { const v = norm(raw); if (!v) return ""; const ex = q.o.find(o => norm(o) === v); if (ex) return ex; return q.o.find(o => v.startsWith(norm(o).slice(0, 14)) || norm(o).startsWith(v.slice(0, 14))) || ""; }
+$("#file-import").addEventListener("change", async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  if (typeof XLSX === "undefined") { setState("No se pudo cargar el lector de Excel. Recarga la página."); return; }
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
+    if (rows.length < 2) { setState("El archivo no tiene respuestas."); return; }
+    const headers = rows[0].map(String);
+    const cols = Object.fromEntries(QUESTIONS.map(q => [q.id, matchColumn(headers, q)]));
+    if (cols.q1 < 0) { const ni = headers.findIndex(h => /^nombre$/i.test(h.trim())); if (ni >= 0) cols.q1 = ni; }
+    if (cols.q2 < 0) { const ei = headers.findIndex(h => /correo/i.test(h)); if (ei >= 0) cols.q2 = ei; }
+    const matched = Object.values(cols).filter(i => i >= 0).length;
+    let added = 0, updated = 0, first = null;
+    for (const row of rows.slice(1)) {
+      if (!row.some(c => String(c).trim())) continue;
+      const a = blankAnswers();
+      for (const q of QUESTIONS) {
+        const i = cols[q.id]; if (i < 0) continue; const raw = String(row[i] ?? "").trim();
+        if (q.type === "grade") { const g = parseGrade(raw); a[q.id] = { grade: g === null ? "" : String(g), notTaken: isNotTaken(raw), comment: raw }; }
+        else if (q.type === "choice") a[q.id] = pickOption(q, raw); else a[q.id] = raw;
+      }
+      if (!a.q1) continue;
+      const existing = Object.keys(students).find(id => (students[id].answers.q1 || "").trim().toLowerCase() === a.q1.trim().toLowerCase());
+      if (existing) { students[existing].answers = a; await persist(existing); updated++; first = first || existing; }
+      else { const id = await createStudent(null, a, "forms"); if (id) { added++; first = first || id; } }
+    }
+    setState(`Importados ${added} nuevos y ${updated} actualizados. Se reconocieron ${matched} de ${QUESTIONS.length} preguntas.`);
+    $("#n-alumnos").textContent = `(${Object.keys(students).length})`;
+    if (first) select(first); else renderList();
+  } catch (err) { setState("No se pudo leer el archivo. Exporta las respuestas de Forms a Excel (.xlsx) y vuelve a intentarlo."); }
+});
+
+/* ============ Acceso ============ */
+async function showPanel() {
+  $("#login").hidden = true; $("#panel").hidden = false; $("#band-actions").hidden = false;
+  const { data: es } = await client.rpc("tfg_es_tutor");
+  if (es !== true) { $("#panel").hidden = true; $("#band-actions").hidden = true; $("#login").hidden = false; $("#l-msg").textContent = "Esta cuenta no figura como tutor. Añade su correo a la tabla tfg_tutores en Supabase."; await client.auth.signOut(); return; }
+  const { data: cfg } = await client.from("tfg_config").select("abierto").eq("id", 1).maybeSingle();
+  $("#sw-open").checked = cfg ? cfg.abierto : true;
+  await loadAll(false);
+}
+$("#login-form").addEventListener("submit", async e => {
+  e.preventDefault(); const btn = $("#l-btn"); btn.disabled = true; $("#l-msg").textContent = "Entrando…";
+  const { error } = await client.auth.signInWithPassword({ email: $("#l-email").value.trim(), password: $("#l-pass").value });
+  btn.disabled = false;
+  if (error) { $("#l-msg").textContent = "Correo o contraseña incorrectos."; return; }
+  $("#l-msg").textContent = ""; showPanel();
+});
+/* ============ Contraseña ============ */
+let recovering = false;
+function showPwd(recovery) {
+  recovering = recovery;
+  $("#login").hidden = true; $("#panel").hidden = true; $("#band-actions").hidden = true; $("#pwd").hidden = false;
+  $("#pwd-title").textContent = recovery ? "Elige una contraseña nueva" : "Cambiar contraseña";
+  $("#p-cancel").hidden = recovery; $("#p-msg").textContent = ""; $("#p-1").value = ""; $("#p-2").value = "";
+  setTimeout(() => $("#p-1").focus(), 0);
+}
+$("#pwd-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const p1 = $("#p-1").value, p2 = $("#p-2").value, msg = $("#p-msg");
+  if (p1.length < 10) { msg.textContent = "La contraseña debe tener al menos 10 caracteres."; return; }
+  if (p1 !== p2) { msg.textContent = "Las dos contraseñas no coinciden."; return; }
+  $("#p-btn").disabled = true; msg.textContent = "Guardando…";
+  const { error } = await client.auth.updateUser({ password: p1 });
+  $("#p-btn").disabled = false;
+  if (error) { msg.textContent = /different|same/i.test(error.message) ? "La nueva contraseña debe ser distinta de la anterior." : "No se pudo cambiar: " + error.message; return; }
+  msg.textContent = "Contraseña cambiada.";
+  setTimeout(() => { $("#pwd").hidden = true; history.replaceState(null, "", location.pathname); showPanel(); }, 900);
+});
+async function forgot() {
+  const email = $("#l-email").value.trim(), msg = $("#l-msg");
+  if (!email) { msg.textContent = "Escribe tu correo arriba y vuelve a pulsar «¿Has olvidado la contraseña?»."; $("#l-email").focus(); return; }
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: new URL("tutor.html", location.href).toString() });
+  msg.textContent = error ? "No se pudo enviar el correo: " + error.message : "Si la cuenta existe, te llegará un correo con un enlace para elegir una contraseña nueva.";
+}
+
+async function boot() {
+  if (!client) { $("#login").hidden = false; $("#login-form").innerHTML = `<div class="warnbox"><strong>Falta configurar Supabase.</strong> Pon la dirección del proyecto y la clave «anon» en <code>config.js</code> y vuelve a publicar.</div>`; return; }
+  client.auth.onAuthStateChange((event) => { if (event === "PASSWORD_RECOVERY") showPwd(true); });
+  const isRecovery = /type=recovery/.test(location.hash) || /type=recovery/.test(location.search);
+  const { data } = await client.auth.getSession();
+  if (isRecovery || recovering) { if (!recovering) showPwd(true); return; }
+  if (data.session) showPanel(); else $("#login").hidden = false;
+}
+boot();
+</script>
+</body>
+</html>

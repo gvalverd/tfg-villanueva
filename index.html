@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cuestionario TFG Villanueva</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>body { margin: 0; }</style>
+</head>
+<body>
+<header class="band">
+  <div class="wrap" style="max-width:860px">
+    <div>
+      <div class="eyebrow">Universidad Villanueva · TFG de Análisis de Negocios · <span id="curso"></span></div>
+      <h1>Cuestionario inicial del TFG</h1>
+      <p>Unos 15 minutos. No es un examen: sirve para proponerte un TFG que te interese y que puedas sacar adelante. Si no has cursado una asignatura, márcalo; también es información útil.</p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="single" id="app">
+    <div class="notice" id="privacy"><strong>Solo tu tutor verá tus respuestas.</strong> Se guarda un borrador en este navegador mientras escribes. Cuando pulses «Enviar respuestas» se las mandas a tu tutor; podrás cambiarlas después.</div>
+    <div id="top-msg"></div>
+    <form id="qform" autocomplete="on" novalidate></form>
+  </div>
+</main>
+
+<div class="submitbar">
+  <div class="inner">
+    <div class="progress"><span class="ptxt" id="ptxt">0 de 39 respondidas</span><span class="pbar"><i id="pbar"></i></span></div>
+    <button class="btn" id="btn-send" type="button">Enviar respuestas <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4"/></svg></button>
+    <div class="status" id="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="shared.js"></script>
+<script>
+"use strict";
+const DRAFT_KEY = "tfg-villanueva-borrador-v1";
+const TOKEN_KEY = "tfg-villanueva-token-v1";
+const client = makeClient();
+let answers = blankAnswers();
+let token = null;
+let sentAt = null;
+let open = true;
+
+$("#curso").textContent = CURSO;
+const ls = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
+const isUuid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s || "");
+function newToken() { return (crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16))); }
+function personalLink() { const u = new URL(location.href); u.search = ""; u.hash = ""; u.searchParams.set("t", token); return u.toString(); }
+
+function renderForm() {
+  $("#qform").innerHTML = SECTIONS.map(s => `<details class="sec" data-sec="${s.k}" open>
+    <summary><span class="letter">${s.k}</span>${esc(s.t)}<span class="count" id="cnt-${s.k}">${secCount(s, answers)}/${s.q.length}</span><svg class="tw" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4"/></svg></summary>
+    <div class="sec-body"><fieldset>${s.q.map(q => qInput(q, answers[q.id])).join("")}</fieldset></div></details>`).join("");
+  refreshProgress();
+}
+function refreshProgress() {
+  for (const s of SECTIONS) { const el = $("#cnt-" + s.k); if (el) el.textContent = `${secCount(s, answers)}/${s.q.length}`; }
+  const n = answeredCount(answers);
+  $("#ptxt").textContent = `${n} de ${QUESTIONS.length} respondidas`;
+  $("#pbar").style.width = Math.round(n / QUESTIONS.length * 100) + "%";
+}
+function setStatus(t, err) { const s = $("#status"); s.textContent = t; s.classList.toggle("err", !!err); }
+function renderSuccess() {
+  if (!sentAt) { $("#top-msg").innerHTML = ""; return; }
+  const when = new Date(sentAt).toLocaleString("es-ES", { dateStyle: "long", timeStyle: "short" });
+  $("#top-msg").innerHTML = `<div class="success">
+    <div class="eyebrow">Respuestas enviadas</div>
+    <h2>Tu tutor ya tiene tus respuestas (última versión: ${esc(when)})</h2>
+    <p>Puedes cambiarlas cuando quieras y volver a pulsar «Enviar respuestas». Desde este navegador se cargan solas; desde otro dispositivo usa tu enlace personal. No lo compartas: quien lo tenga puede ver y cambiar tus respuestas.</p>
+    <div class="linkrow"><input id="plink" type="text" readonly value="${esc(personalLink())}" aria-label="Tu enlace personal"><button class="btn small" type="button" id="btn-copy">Copiar enlace</button></div>
+  </div>`;
+}
+
+document.addEventListener("input", e => {
+  const id = applyInput(answers, e.target); if (!id) return;
+  ls.set(DRAFT_KEY, JSON.stringify(answers));
+  refreshProgress();
+  if (sentAt) setStatus("Tienes cambios sin enviar.");
+});
+document.addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.id === "btn-copy") return copyText($("#plink").value, b);
+  if (b.id === "btn-send") return send();
+});
+
+async function send() {
+  const btn = $("#btn-send");
+  if (!client) { setStatus("La página aún no está conectada a la base de datos. Avisa a tu tutor.", true); return; }
+  if (!open) { setStatus("El cuestionario está cerrado. Escribe a tu tutor si necesitas cambiar algo.", true); return; }
+  const name = (answers.q1 || "").trim(), mail = (answers.q2 || "").trim();
+  if (name.length < 2) { setStatus("Escribe tu nombre y apellidos (pregunta 1).", true); $("#q1").focus(); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { setStatus("Escribe tu correo universitario (pregunta 2).", true); $("#q2").focus(); return; }
+  if (!token) { token = newToken(); ls.set(TOKEN_KEY, token); }
+  btn.disabled = true; setStatus("Enviando…");
+  try {
+    const { data, error } = await client.rpc("tfg_guardar_respuesta", { p_token: token, p_nombre: name, p_email: mail, p_answers: answers });
+    if (error) throw error;
+    sentAt = data || new Date().toISOString();
+    ls.set(DRAFT_KEY, JSON.stringify(answers));
+    const dom = CFG.DOMINIO_CORREO;
+    const extra = dom && !mail.toLowerCase().endsWith("@" + dom) ? ` Revisa el correo: no es una dirección @${dom}.` : "";
+    const missing = QUESTIONS.length - answeredCount(answers);
+    setStatus((missing ? `Enviado. Te quedan ${missing} preguntas sin responder; puedes completarlas y volver a enviar.` : "Enviado. ¡Gracias!") + extra);
+    renderSuccess();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (err) {
+    const m = String(err && err.message || "");
+    setStatus(/cerrado/i.test(m) ? "El cuestionario está cerrado." : /nombre/i.test(m) ? "Escribe tu nombre y apellidos." : "No se ha podido enviar. Comprueba tu conexión y vuelve a intentarlo; tus respuestas siguen guardadas en este navegador.", true);
+  } finally { btn.disabled = false; }
+}
+
+async function boot() {
+  const urlToken = new URL(location.href).searchParams.get("t");
+  if (isUuid(urlToken)) { token = urlToken; ls.set(TOKEN_KEY, token); }
+  else if (isUuid(ls.get(TOKEN_KEY))) token = ls.get(TOKEN_KEY);
+  try { const d = JSON.parse(ls.get(DRAFT_KEY) || "null"); if (d) answers = normalizeAnswers(d); } catch (e) {}
+  renderForm();
+  if (!client) { $("#top-msg").innerHTML = `<div class="warnbox"><strong>Página sin configurar.</strong> Falta poner la dirección y la clave de Supabase en <code>config.js</code>. Puedes rellenar el cuestionario; se guardará en este navegador.</div>`; return; }
+  try {
+    const { data: ab } = await client.rpc("tfg_esta_abierto");
+    open = ab !== false;
+    if (!open) { $("#top-msg").innerHTML = `<div class="warnbox"><strong>El cuestionario está cerrado.</strong> Puedes consultar tus respuestas, pero ya no se pueden enviar cambios.</div>`; $("#btn-send").disabled = true; }
+  } catch (e) {}
+  if (token) {
+    try {
+      const { data, error } = await client.rpc("tfg_leer_mi_respuesta", { p_token: token });
+      if (!error && data && data.length) {
+        const row = data[0];
+        const draft = ls.get(DRAFT_KEY);
+        // Si viene del enlace personal o no hay borrador, usamos lo enviado.
+        if (urlToken || !draft) { answers = normalizeAnswers(row.answers); renderForm(); ls.set(DRAFT_KEY, JSON.stringify(answers)); }
+        sentAt = row.updated_at; if (open) renderSuccess(); else $("#top-msg").insertAdjacentHTML("beforeend", "");
+        if (urlToken) history.replaceState(null, "", location.pathname);
+      }
+    } catch (e) {}
+  }
+}
+boot();
+</script>
+</body>
+</html>
