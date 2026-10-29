@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 <style>body { margin: 0; } [hidden] { display: none !important; }</style>
 </head>
 <body>
@@ -67,6 +67,7 @@
       <div class="toolbar">
         <button class="btn ghost small" id="btn-refresh" type="button">Actualizar</button>
         <button class="btn ghost small" id="btn-csv" type="button">Exportar todos (.csv)</button>
+        <button class="btn danger small" id="btn-empty" type="button" hidden>Eliminar fichas vacías</button>
       </div>
       <label class="switch"><input type="checkbox" id="sw-open"> Cuestionario abierto</label>
       <div class="q"><label for="student-url" style="font-size:13px;color:var(--muted)">Enlace para los alumnos</label>
@@ -78,14 +79,14 @@
   </div>
 </div>
 
-<script src="config.js?v=4"></script>
+<script src="config.js?v=5"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="shared.js?v=4"></script>
-<script src="tutela.js?v=4"></script>
-<script src="tutor-editor.js?v=4"></script>
-<script src="tutor-propuesta.js?v=4"></script>
+<script src="shared.js?v=5"></script>
+<script src="tutela.js?v=5"></script>
+<script src="tutor-editor.js?v=5"></script>
+<script src="tutor-propuesta.js?v=5"></script>
 <script>
 "use strict";
 const client = makeClient();
@@ -115,12 +116,26 @@ async function loadAll(keepCurrent) {
 }
 async function persist(id) {
   const rec = students[id]; if (!rec) return;
-  const { data, error } = await client.from("tfg_respuestas").update({ nombre: (rec.answers.q1 || "").trim() || "Sin nombre", email: (rec.answers.q2 || "").trim() || null, answers: rec.answers, tutor: rec.tutor, updated_at: new Date().toISOString() }).eq("id", id).select("updated_at").single();
+  const { data, error } = await client.from("tfg_respuestas").update({ nombre: (rec.answers.q1 || "").trim() || "Sin nombre", email: normEmail(rec.answers.q2), answers: rec.answers, tutor: rec.tutor, updated_at: new Date().toISOString() }).eq("id", id).select("updated_at").single();
   if (pendingId === id) pendingId = null;
-  if (error) { setSaved("No se pudo guardar: " + error.message); return; }
+  if (error) { setSaved(isDup(error) ? "No se ha guardado: ese correo ya lo tiene otro alumno." : "No se pudo guardar: " + error.message); return; }
   rec.updatedAt = data.updated_at; setSaved("Guardado");
 }
 function scheduleSave() { setSaved("Guardando…"); pendingId = currentId; clearTimeout(saveTimer); const id = currentId; saveTimer = setTimeout(() => persist(id), 700); }
+
+const normEmail = e => (String(e || "").trim().toLowerCase()) || null;
+const isDup = err => err && (err.code === "23505" || /duplicate|unique/i.test(err.message || ""));
+const isEmpty = s => !(s.answers.q1 || "").trim() && !(s.answers.q2 || "").trim() && answeredCount(s.answers) === 0;
+async function deleteStudents(ids) {
+  if (!ids.length) return;
+  const { error } = await client.from("tfg_respuestas").delete().in("id", ids);
+  if (error) { setState("No se pudo eliminar: " + error.message); return; }
+  for (const id of ids) delete students[id];
+  if (!students[currentId]) currentId = Object.keys(students)[0] || null;
+  $("#n-alumnos").textContent = `(${Object.keys(students).length})`;
+  setState(ids.length === 1 ? "Ficha eliminada." : `${ids.length} fichas eliminadas.`);
+  select(currentId);
+}
 
 /* ============ Lista ============ */
 function renderList() {
@@ -130,12 +145,17 @@ function renderList() {
     const s = students[id]; const r = recommend(s.answers);
     const chosen = s.tutor.line ? LINES.find(l => l.id === s.tutor.line)?.short : null;
     const when = s.updatedAt ? new Date(s.updatedAt).toLocaleDateString("es-ES", { day: "numeric", month: "short" }) : "";
-    return `<button class="item" type="button" data-id="${esc(id)}" aria-current="${id === currentId}">
-      <span class="n">${esc(s.answers.q1 || "Sin nombre")}</span>
-      <span class="l">${chosen ? "Acordada: " + esc(chosen) : "Sugerida: " + esc(r.top.short) + " · " + r.top.score} · ${answeredCount(s.answers)}/${QUESTIONS.length} · ${esc(when)}</span>
-    </button>`;
+    return `<div class="item-row" aria-current="${id === currentId}">
+      <button class="item" type="button" data-id="${esc(id)}" aria-current="${id === currentId}">
+        <span class="n">${esc(s.answers.q1 || "Sin nombre")}</span>
+        <span class="l">${s.answers.q2 ? esc(s.answers.q2) + " · " : ""}${chosen ? "Acordada: " + esc(chosen) : "Sugerida: " + esc(r.top.short)} · ${answeredCount(s.answers)}/${QUESTIONS.length} · ${esc(when)}</span>
+      </button>
+      <button class="iconbtn del" type="button" data-del="${esc(id)}" aria-label="Eliminar a ${esc(s.answers.q1 || "este alumno")}" title="Eliminar">&times;</button>
+    </div>`;
   });
   $("#list").innerHTML = rows.length ? rows.join("") : `<div style="padding:12px 0;color:var(--muted);font-size:14px">${ids.length ? "Ningún alumno coincide con la búsqueda." : "Aún no hay respuestas. Comparte el enlace para los alumnos."}</div>`;
+  const empties = ids.filter(id => isEmpty(students[id]));
+  const be = $("#btn-empty"); be.hidden = !empties.length; be.dataset.confirm = ""; be.textContent = `Eliminar fichas vacías (${empties.length})`;
 }
 
 /* ============ Ficha ============ */
@@ -219,7 +239,17 @@ $("#search").addEventListener("input", renderList);
 document.addEventListener("click", async e => {
   const item = e.target.closest(".item"); if (item) { select(item.dataset.id); return; }
   const b = e.target.closest("button"); if (!b) return;
-  if (b.id === "btn-new") return createStudent();
+  if (b.dataset.del) {
+    if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "¿Borrar?"; setTimeout(() => { if (b.isConnected) { b.dataset.confirm = ""; b.innerHTML = "&times;"; } }, 3500); return; }
+    return deleteStudents([b.dataset.del]);
+  }
+  if (b.id === "btn-empty") {
+    const empties = Object.keys(students).filter(id => isEmpty(students[id]));
+    if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = `Pulsa otra vez para borrar ${empties.length}`; return; }
+    return deleteStudents(empties);
+  }
+  if (b.id === "btn-new") return showNewForm();
+  if (b.id === "nw-cancel") { select(currentId); return; }
   if (b.id === "btn-import") return $("#file-import").click();
   if (b.id === "btn-csv") return exportCsv();
   if (b.id === "btn-refresh") return loadAll(true);
@@ -231,9 +261,7 @@ document.addEventListener("click", async e => {
   if (b.id === "btn-plink") { const u = new URL("./", location.href); u.searchParams.set("t", students[currentId].token); return copyText(u.toString(), b); }
   if (b.id === "btn-del") {
     if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Pulsa otra vez para eliminar"; setTimeout(() => { if (b.isConnected) { b.dataset.confirm = ""; b.textContent = "Eliminar ficha"; } }, 4000); return; }
-    const id = currentId; const { error } = await client.from("tfg_respuestas").delete().eq("id", id);
-    if (error) { setSaved("No se pudo eliminar: " + error.message); return; }
-    delete students[id]; currentId = Object.keys(students)[0] || null; select(currentId); $("#n-alumnos").textContent = `(${Object.keys(students).length})`; return;
+    return deleteStudents([currentId]);
   }
   if (b.id === "dl-tutela") return dlTutela();
   if (b.id === "dl-ficha") { downloadBlob(`Ficha_TFG_${fileName()}.md`, fichaMd(), "text/markdown;charset=utf-8"); $("#dl-msg").textContent = "Ficha descargada."; }
@@ -245,12 +273,36 @@ $("#sw-open").addEventListener("change", async e => {
 });
 window.addEventListener("focus", () => { if (client && !$("#panel").hidden && !pendingId) loadAll(true); });
 
+function showNewForm() {
+  if (currentTab !== "alumnos") showTab("alumnos");
+  $("#form-col").innerHTML = `<form class="box" id="new-form" style="max-width:560px" novalidate>
+      <h4>Nuevo alumno</h4>
+      <div class="q"><label for="nw-name">Nombre y apellidos</label><input id="nw-name" type="text" required></div>
+      <div class="q"><label for="nw-email">Correo universitario</label><input id="nw-email" type="email" required placeholder="nombre@alumnos.villanueva.edu"></div>
+      <div class="toolbar"><button class="btn" type="submit">Crear ficha</button><button class="btn ghost" type="button" id="nw-cancel">Cancelar</button></div>
+      <div class="msg" id="nw-msg" aria-live="polite"></div>
+    </form>`;
+  setTimeout(() => $("#nw-name").focus(), 0);
+}
+document.addEventListener("submit", async e => {
+  if (e.target.id !== "new-form") return;
+  e.preventDefault();
+  const name = $("#nw-name").value.trim(), email = normEmail($("#nw-email").value), msg = $("#nw-msg");
+  if (name.length < 2) { msg.textContent = "Escribe el nombre y apellidos."; $("#nw-name").focus(); return; }
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { msg.textContent = "Escribe un correo válido."; $("#nw-email").focus(); return; }
+  const dup = Object.keys(students).find(id => normEmail(students[id].answers.q2) === email);
+  if (dup) { msg.textContent = "Ya hay una ficha con ese correo. Te la abro."; setTimeout(() => select(dup), 900); return; }
+  const a = blankAnswers(); a.q1 = name; a.q2 = email;
+  const id = await createStudent(null, a, "tutor");
+  if (id) { openSecs.add("A"); select(id); }
+  else msg.textContent = $("#store-state").textContent;
+});
 async function createStudent(name, answers, origen) {
   const a = answers || blankAnswers(); if (name) a.q1 = name;
-  const { data, error } = await client.from("tfg_respuestas").insert({ token: crypto.randomUUID(), nombre: (a.q1 || "").trim() || "Sin nombre", email: (a.q2 || "").trim() || null, answers: a, origen: origen || "tutor" }).select().single();
-  if (error) { setState("No se pudo crear la ficha: " + error.message); return null; }
+  if (a.q2) a.q2 = normEmail(a.q2) || "";
+  const { data, error } = await client.from("tfg_respuestas").insert({ token: crypto.randomUUID(), nombre: (a.q1 || "").trim() || "Sin nombre", email: normEmail(a.q2), answers: a, origen: origen || "tutor" }).select().single();
+  if (error) { setState(isDup(error) ? "Ya existe una ficha con ese correo." : "No se pudo crear la ficha: " + error.message); return null; }
   students[data.id] = fromRow(data);
-  if (!answers) { openSecs.add("A"); select(data.id); setTimeout(() => $("#q1")?.focus(), 0); }
   return data.id;
 }
 function fileName() { return slug(students[currentId]?.answers.q1 || "alumno").replace(/-/g, "_"); }
@@ -330,7 +382,9 @@ $("#file-import").addEventListener("change", async e => {
         else if (q.type === "choice") a[q.id] = pickOption(q, raw); else a[q.id] = raw;
       }
       if (!a.q1) continue;
-      const existing = Object.keys(students).find(id => (students[id].answers.q1 || "").trim().toLowerCase() === a.q1.trim().toLowerCase());
+      const em = normEmail(a.q2); if (em) a.q2 = em;
+      const existing = (em && Object.keys(students).find(id => normEmail(students[id].answers.q2) === em))
+        || Object.keys(students).find(id => !normEmail(students[id].answers.q2) && (students[id].answers.q1 || "").trim().toLowerCase() === a.q1.trim().toLowerCase());
       if (existing) { students[existing].answers = a; await persist(existing); updated++; first = first || existing; }
       else { const id = await createStudent(null, a, "forms"); if (id) { added++; first = first || id; } }
     }

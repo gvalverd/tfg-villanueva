@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 <style>body { margin: 0; } [hidden] { display: none !important; }</style>
 </head>
 <body>
@@ -38,9 +38,9 @@
   </div>
 </div>
 
-<script src="config.js?v=4"></script>
+<script src="config.js?v=5"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="shared.js?v=4"></script>
+<script src="shared.js?v=5"></script>
 <script>
 "use strict";
 const DRAFT_KEY = "tfg-villanueva-borrador-v1";
@@ -118,7 +118,7 @@ async function send() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
     const m = String(err && err.message || "");
-    setStatus(/cerrado/i.test(m) ? "El cuestionario está cerrado." : /nombre/i.test(m) ? "Escribe tu nombre y apellidos." : "No se ha podido enviar. Comprueba tu conexión y vuelve a intentarlo; tus respuestas siguen guardadas en este navegador.", true);
+    setStatus(/correo/i.test(m) ? "Ya hay unas respuestas enviadas con este correo. Abre tu enlace personal para cambiarlas o pide a tu tutor que te lo reenvíe." : /cerrado/i.test(m) ? "El cuestionario está cerrado." : /nombre/i.test(m) ? "Escribe tu nombre y apellidos." : "No se ha podido enviar. Comprueba tu conexión y vuelve a intentarlo; tus respuestas siguen guardadas en este navegador.", true);
   } finally { btn.disabled = false; }
 }
 

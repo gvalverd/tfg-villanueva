@@ -200,3 +200,9 @@ details.sec[open] > summary .tw { transform: rotate(90deg); }
 .pill.reco { background: var(--accent); color: var(--accent-fg); }
 .ed-field { display: flex; flex-direction: column; gap: 4px; }
 @media (max-width: 560px) { .ed-q { grid-template-columns: 1fr; } .ed-q .acts { flex-direction: row; } }
+.item-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-bottom: 1px solid var(--line); }
+.item-row .item { border-bottom: 0; min-width: 0; }
+.item-row .item .l { overflow-wrap: anywhere; }
+.item-row .iconbtn.del { margin-right: 6px; }
+.item-row[aria-current="true"] { background: var(--surface-2); box-shadow: inset 4px 0 0 var(--accent); }
+.item-row[aria-current="true"] .item { background: transparent; box-shadow: none; }
