@@ -13,7 +13,7 @@ const LINES = [
   { id: "reco", name: "Sistemas de recomendación", short: "Recomendadores" },
 ];
 const LINE_NAMES = LINES.map(l => l.name);
-const SECTIONS = [
+const DEFAULT_SECTIONS = [
   { k: "A", t: "Perfil y situación académica", q: [
     { id: "q1", t: "Nombre y apellidos", type: "text" },
     { id: "q2", t: "Correo universitario", type: "email" },
@@ -66,8 +66,53 @@ const SECTIONS = [
     { id: "q39", t: "¿Qué te gustaría contarme antes de nuestra primera reunión?", type: "area" },
   ]},
 ];
-const QUESTIONS = SECTIONS.flatMap(s => s.q);
-const QNUM = Object.fromEntries(QUESTIONS.map((q, i) => [q.id, i + 1]));
+const DEFAULT_INTRO = {
+  title: "Cuestionario inicial del TFG",
+  text: "Unos 15 minutos. No es un examen: sirve para proponerte un TFG que te interese y que puedas sacar adelante. Si no has cursado una asignatura, márcalo; también es información útil.",
+  privacy: "Solo tu tutor verá tus respuestas. Se guarda un borrador en este navegador mientras escribes. Cuando pulses «Enviar respuestas» se las mandas a tu tutor; podrás cambiarlas después.",
+};
+// Preguntas que no se pueden borrar ni cambiar de tipo, y las que usa el recomendador.
+const LOCKED_IDS = ["q1", "q2"];
+const LINE_OPTION_IDS = ["q29", "q30"];
+const RECO_IDS = ["q6", "q7", "q8", "q9", "q10", "q11", "q12", "q13", "q16", "q17", "q19", "q20", "q22", "q23", "q27", "q28", "q29", "q30", "q31", "q32", "q33", "q34", "q37"];
+const clone = o => JSON.parse(JSON.stringify(o));
+const DEFAULT_DEF = { version: 1, intro: clone(DEFAULT_INTRO), sections: clone(DEFAULT_SECTIONS.map(s => ({ t: s.t, q: s.q }))) };
+// Opciones originales: el recomendador traduce cada respuesta a la opción original por su posición,
+// así puedes reescribir el texto de las opciones sin romperlo (mantén el orden).
+const CANON = Object.fromEntries(DEFAULT_SECTIONS.flatMap(s => s.q).filter(q => q.type === "choice" && !LINE_OPTION_IDS.includes(q.id)).map(q => [q.id, q.o.slice()]));
+
+let SECTIONS = [], QUESTIONS = [], QNUM = {}, INTRO = clone(DEFAULT_INTRO);
+function setDefinition(def) {
+  const d = def && Array.isArray(def.sections) && def.sections.length ? def : DEFAULT_DEF;
+  SECTIONS = d.sections.map((s, i) => ({ k: String.fromCharCode(65 + i), t: s.t || "", q: (s.q || []).map(q => {
+    const out = { id: q.id, t: q.t || "", type: q.type || "text" };
+    if (q.dim) out.dim = q.dim;
+    if (LINE_OPTION_IDS.includes(q.id)) { out.type = "choice"; out.o = LINE_NAMES.slice(); }
+    else if (out.type === "choice") out.o = (q.o || []).filter(x => String(x).trim()).map(String);
+    if (LOCKED_IDS.includes(q.id)) out.type = q.id === "q2" ? "email" : "text";
+    return out;
+  }) }));
+  QUESTIONS = SECTIONS.flatMap(s => s.q);
+  QNUM = Object.fromEntries(QUESTIONS.map((q, i) => [q.id, i + 1]));
+  INTRO = Object.assign(clone(DEFAULT_INTRO), (d.intro || {}));
+}
+function currentDefinition() { return { version: 1, intro: clone(INTRO), sections: SECTIONS.map(s => ({ t: s.t, q: clone(s.q) })) }; }
+setDefinition(null);
+async function loadDefinition(client) {
+  if (!client) return false;
+  try { const { data, error } = await client.rpc("tfg_leer_cuestionario"); if (!error && data && data.sections) { setDefinition(data); return true; } } catch (e) {}
+  return false;
+}
+function canonize(a) {
+  const b = Object.assign({}, a);
+  for (const id of Object.keys(CANON)) {
+    const q = QUESTIONS.find(x => x.id === id);
+    if (!q || !b[id]) continue;
+    const i = (q.o || []).indexOf(b[id]);
+    b[id] = i >= 0 && i < CANON[id].length ? CANON[id][i] : b[id];
+  }
+  return b;
+}
 
 /* ============ Motor de recomendación (función pura) ============ */
 const SECTORS = [
@@ -141,7 +186,8 @@ function sectorsOf(a) {
 }
 
 function recommend(a) {
-  const idx = (id) => { const q = QUESTIONS.find(x => x.id === id); return a[id] ? q.o.indexOf(a[id]) : -1; };
+  a = canonize(a || {});
+  const idx = (id) => { const o = CANON[id]; return a[id] && o ? o.indexOf(a[id]) : -1; };
   const py = idx("q16"), sql = idx("q17"), git = idx("q23");
   const gN = id => { const g = gradeOf(a, id); return g === null ? null : clamp01((g - 4) / 5.5); };
   const longTxt = (id, n) => filled(a[id]) && String(a[id]).trim().length >= n && !/^no\b|^nunca|^ninguno/i.test(String(a[id]).trim());
@@ -225,6 +271,9 @@ const chevSvg = '<svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path 
 const slug = s => (s || "alumno").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "alumno";
 function blankAnswers() { const a = {}; for (const q of QUESTIONS) a[q.id] = q.type === "grade" ? { grade: "", notTaken: false, comment: "" } : ""; return a; }
 function normalizeAnswers(a) { const b = blankAnswers(); for (const q of QUESTIONS) { const v = a ? a[q.id] : undefined; if (v === undefined || v === null) continue; if (q.type === "grade") b[q.id] = typeof v === "object" ? { grade: v.grade ?? "", notTaken: !!v.notTaken, comment: v.comment ?? "" } : { grade: "", notTaken: false, comment: String(v) }; else b[q.id] = typeof v === "string" ? v : String(v); } return b; }
+// Conserva respuestas a preguntas que el tutor haya retirado, para no perderlas al guardar.
+function keepExtra(d) { const o = {}; for (const k of Object.keys(d || {})) if (!QNUM[k]) o[k] = d[k]; return o; }
+function fullAnswers(d) { return Object.assign(normalizeAnswers(d), keepExtra(d)); }
 function isAnswered(q, v) { return q.type === "grade" ? !!(v && (v.notTaken || String(v.grade ?? "") !== "" || filled(v.comment))) : filled(v); }
 function secCount(sec, a) { return sec.q.filter(q => isAnswered(q, a[q.id])).length; }
 function answeredCount(a) { return QUESTIONS.filter(q => isAnswered(q, a[q.id])).length; }

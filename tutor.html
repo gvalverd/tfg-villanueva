@@ -30,6 +30,12 @@
 </header>
 
 <div class="wrap">
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Secciones del panel" hidden>
+    <button type="button" role="tab" data-tab="alumnos" aria-selected="true">Alumnos</button>
+    <button type="button" role="tab" data-tab="preguntas" aria-selected="false">Preguntas y textos</button>
+  </nav>
+  <section class="editor" id="editor" hidden></section>
+
   <section class="login" id="login" hidden>
     <h2 style="font-size:24px">Acceso del tutor</h2>
     <p style="margin:0;color:var(--muted)">Entra con el usuario que creaste en Supabase. Los alumnos no tienen acceso a esta página.</p>
@@ -78,6 +84,8 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="shared.js"></script>
 <script src="tutela.js"></script>
+<script src="tutor-editor.js"></script>
+<script src="tutor-propuesta.js"></script>
 <script>
 "use strict";
 const client = makeClient();
@@ -89,7 +97,7 @@ $("#curso").textContent = CURSO;
 const studentUrl = new URL("./", location.href).toString();
 $("#student-url").value = studentUrl;
 
-function fromRow(r) { return { id: r.id, token: r.token, answers: normalizeAnswers(r.answers), tutor: Object.assign({ line: "", title: "", phone: "", notes: "" }, r.tutor || {}), origen: r.origen, updatedAt: r.updated_at }; }
+function fromRow(r) { return { id: r.id, token: r.token, answers: fullAnswers(r.answers), tutor: Object.assign({ line: "", title: "", phone: "", notes: "" }, r.tutor || {}), origen: r.origen, updatedAt: r.updated_at }; }
 function setState(t) { $("#store-state").textContent = t; }
 function setSaved(t) { const el = $("#saved"); if (el) el.textContent = t; }
 
@@ -186,7 +194,8 @@ function renderReco() {
         <button class="btn" type="button" id="dl-tutela">Hoja de tutela (.docx) ${chevSvg}</button>
         <button class="btn ghost" type="button" id="dl-ficha">Ficha completa (.md) ${chevSvg}</button>
       </div>
-      <div class="msg" id="dl-msg" aria-live="polite"></div></div>`;
+      <div class="msg" id="dl-msg" aria-live="polite"></div></div>
+    ${propuestaBox(rec)}`;
 }
 function renderRecoKeepFocus() { const act = document.activeElement; if (act && $("#reco").contains(act)) return; renderReco(); }
 function refreshCounts() { const a = students[currentId]?.answers; if (!a) return; for (const s of SECTIONS) { const el = $("#cnt-" + s.k); if (el) el.textContent = `${secCount(s, a)}/${s.q.length}`; } }
@@ -201,7 +210,7 @@ document.addEventListener("input", e => {
     refreshCounts(); renderList(); renderRecoKeepFocus(); scheduleSave();
   } else if (el.dataset.t) {
     rec.tutor[el.dataset.t] = el.value;
-    if (el.dataset.t === "line") { rec.tutor.title = ""; renderReco(); renderList(); $("#t-line")?.focus(); }
+    if (el.dataset.t === "line") { rec.tutor.title = ""; rec.tutor.propuesta = null; renderReco(); renderList(); $("#t-line")?.focus(); }
     scheduleSave();
   }
 });
@@ -215,7 +224,7 @@ document.addEventListener("click", async e => {
   if (b.id === "btn-csv") return exportCsv();
   if (b.id === "btn-refresh") return loadAll(true);
   if (b.id === "btn-pwd") return showPwd(false);
-  if (b.id === "p-cancel") { $("#pwd").hidden = true; $("#panel").hidden = false; $("#band-actions").hidden = false; return; }
+  if (b.id === "p-cancel") { $("#pwd").hidden = true; $("#tabs").hidden = false; showTab(currentTab); return; }
   if (b.id === "btn-forgot") return forgot();
   if (b.id === "btn-logout") { await client.auth.signOut(); location.reload(); return; }
   if (b.id === "btn-copy-url" || b.dataset.act === "copy-url") return copyText(studentUrl, b);
@@ -332,12 +341,24 @@ $("#file-import").addEventListener("change", async e => {
 });
 
 /* ============ Acceso ============ */
+let currentTab = "alumnos";
+function showTab(tab) {
+  if (tab === "preguntas" && !editorReady()) return;
+  currentTab = tab;
+  for (const b of document.querySelectorAll("#tabs [data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  $("#panel").hidden = tab !== "alumnos"; $("#editor").hidden = tab !== "preguntas";
+  $("#btn-new").hidden = tab !== "alumnos"; $("#btn-import").hidden = tab !== "alumnos";
+  if (tab === "preguntas") renderEditor();
+  try { history.replaceState(null, "", tab === "preguntas" ? "#preguntas" : location.pathname); } catch (e) {}
+}
 async function showPanel() {
-  $("#login").hidden = true; $("#panel").hidden = false; $("#band-actions").hidden = false;
+  $("#login").hidden = true; $("#pwd").hidden = true; $("#tabs").hidden = false; $("#band-actions").hidden = false;
   const { data: es } = await client.rpc("tfg_es_tutor");
-  if (es !== true) { $("#panel").hidden = true; $("#band-actions").hidden = true; $("#login").hidden = false; $("#l-msg").textContent = "Esta cuenta no figura como tutor. Añade su correo a la tabla tfg_tutores en Supabase."; await client.auth.signOut(); return; }
+  if (es !== true) { $("#panel").hidden = true; $("#editor").hidden = true; $("#tabs").hidden = true; $("#band-actions").hidden = true; $("#login").hidden = false; $("#l-msg").textContent = "Esta cuenta no figura como tutor. Añade su correo a la tabla tfg_tutores en Supabase."; await client.auth.signOut(); return; }
   const { data: cfg } = await client.from("tfg_config").select("abierto").eq("id", 1).maybeSingle();
   $("#sw-open").checked = cfg ? cfg.abierto : true;
+  await loadDefinition(client);
+  showTab(location.hash === "#preguntas" ? "preguntas" : "alumnos");
   await loadAll(false);
 }
 $("#login-form").addEventListener("submit", async e => {
@@ -351,7 +372,7 @@ $("#login-form").addEventListener("submit", async e => {
 let recovering = false;
 function showPwd(recovery) {
   recovering = recovery;
-  $("#login").hidden = true; $("#panel").hidden = true; $("#band-actions").hidden = true; $("#pwd").hidden = false;
+  $("#login").hidden = true; $("#panel").hidden = true; $("#editor").hidden = true; $("#tabs").hidden = true; $("#band-actions").hidden = recovery; $("#pwd").hidden = false;
   $("#pwd-title").textContent = recovery ? "Elige una contraseña nueva" : "Cambiar contraseña";
   $("#p-cancel").hidden = recovery; $("#p-msg").textContent = ""; $("#p-1").value = ""; $("#p-2").value = "";
   setTimeout(() => $("#p-1").focus(), 0);
@@ -379,6 +400,7 @@ async function boot() {
   if (!client) { $("#login").hidden = false; $("#login-form").innerHTML = `<div class="warnbox"><strong>Falta configurar Supabase.</strong> Pon la dirección del proyecto y la clave «anon» en <code>config.js</code> y vuelve a publicar.</div>`; return; }
   client.auth.onAuthStateChange((event) => { if (event === "PASSWORD_RECOVERY") showPwd(true); });
   const isRecovery = /type=recovery/.test(location.hash) || /type=recovery/.test(location.search);
+  $("#tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
   const { data } = await client.auth.getSession();
   if (isRecovery || recovering) { if (!recovering) showPwd(true); return; }
   if (data.session) showPanel(); else $("#login").hidden = false;

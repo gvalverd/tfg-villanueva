@@ -16,15 +16,15 @@
   <div class="wrap" style="max-width:860px">
     <div>
       <div class="eyebrow">Universidad Villanueva · TFG de Análisis de Negocios · <span id="curso"></span></div>
-      <h1>Cuestionario inicial del TFG</h1>
-      <p>Unos 15 minutos. No es un examen: sirve para proponerte un TFG que te interese y que puedas sacar adelante. Si no has cursado una asignatura, márcalo; también es información útil.</p>
+      <h1 id="intro-title">Cuestionario inicial del TFG</h1>
+      <p id="intro-text">Unos 15 minutos. No es un examen: sirve para proponerte un TFG que te interese y que puedas sacar adelante. Si no has cursado una asignatura, márcalo; también es información útil.</p>
     </div>
   </div>
 </header>
 
 <main class="wrap">
   <div class="single" id="app">
-    <div class="notice" id="privacy"><strong>Solo tu tutor verá tus respuestas.</strong> Se guarda un borrador en este navegador mientras escribes. Cuando pulses «Enviar respuestas» se las mandas a tu tutor; podrás cambiarlas después.</div>
+    <div class="notice" id="privacy">Solo tu tutor verá tus respuestas. Se guarda un borrador en este navegador mientras escribes. Cuando pulses «Enviar respuestas» se las mandas a tu tutor; podrás cambiarlas después.</div>
     <div id="top-msg"></div>
     <form id="qform" autocomplete="on" novalidate></form>
   </div>
@@ -126,7 +126,10 @@ async function boot() {
   const urlToken = new URL(location.href).searchParams.get("t");
   if (isUuid(urlToken)) { token = urlToken; ls.set(TOKEN_KEY, token); }
   else if (isUuid(ls.get(TOKEN_KEY))) token = ls.get(TOKEN_KEY);
-  try { const d = JSON.parse(ls.get(DRAFT_KEY) || "null"); if (d) answers = normalizeAnswers(d); } catch (e) {}
+  if (client) await loadDefinition(client);
+  $("#intro-title").textContent = INTRO.title; $("#intro-text").textContent = INTRO.text; $("#privacy").textContent = INTRO.privacy;
+  document.title = INTRO.title + " · Villanueva";
+  try { const d = JSON.parse(ls.get(DRAFT_KEY) || "null"); if (d) answers = fullAnswers(d); } catch (e) {}
   renderForm();
   if (!client) { $("#top-msg").innerHTML = `<div class="warnbox"><strong>Página sin configurar.</strong> Falta poner la dirección y la clave de Supabase en <code>config.js</code>. Puedes rellenar el cuestionario; se guardará en este navegador.</div>`; return; }
   try {
@@ -141,7 +144,7 @@ async function boot() {
         const row = data[0];
         const draft = ls.get(DRAFT_KEY);
         // Si viene del enlace personal o no hay borrador, usamos lo enviado.
-        if (urlToken || !draft) { answers = normalizeAnswers(row.answers); renderForm(); ls.set(DRAFT_KEY, JSON.stringify(answers)); }
+        if (urlToken || !draft) { answers = fullAnswers(row.answers); renderForm(); ls.set(DRAFT_KEY, JSON.stringify(answers)); }
         sentAt = row.updated_at; if (open) renderSuccess(); else $("#top-msg").insertAdjacentHTML("beforeend", "");
         if (urlToken) history.replaceState(null, "", location.pathname);
       }
